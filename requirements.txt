@@ -1,0 +1,10 @@
+pandas
+numpy
+scikit-learn
+librosa
+onnxruntime
+onnxscript
+# If you have an NVIDIA GPU, install the CUDA version instead from https://pytorch.org/get-started/locally/
+torch
+# if training on kaggle AND want to export the logs
+kaggle

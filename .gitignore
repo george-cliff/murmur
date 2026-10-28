@@ -1,0 +1,18 @@
+/target
+/.claude
+CLAUDE.md
+data/
+docs/private/
+docs/papers/
+.venv/
+logs/
+models/
+output/environment.json
+__pycache__/
+*.pyc
+.obsidian/
+docs/model-tuning.md
+docs/tuning-report.md
+
+# generated spectrogram images (derived from dataset audio)
+output/*.png
