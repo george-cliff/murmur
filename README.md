@@ -1,154 +1,145 @@
+![Murmur: a bioacoustics project](assets/murmur-banner.svg)
+
 # Murmur
 
-![Murmur banner](assets/murmur-banner.svg)
+*A bioacoustics project for bird detection and species identification.*
 
-Murmur is a bioacoustics project for detecting bird calls and identifying species offline. It combines a Python model-development pipeline with a Rust desktop proof of concept, with the longer-term aim of running inference on a small field device and sending detections to a home server.
+## Overview
 
-The desktop pipeline exists and is under active development. The field device, radio gateway, server ingestion service, and dashboard described below are planned components rather than completed ones.
+Murmur is a bioacoustics project exploring bird-activity detection using machine learning, with the longer-term goal of monitoring wildlife in remote locations through low-power field devices.
 
-## Current state
+The current desktop proof of concept processes prerecorded WAV files through two machine-learning models. Sparrowhawk, a custom classifier trained using Python and PyTorch, detects bird activity before Google's Perch v2 model identifies likely species. Rust handles audio processing, ONNX inference and SQLite storage.
 
-### Implemented
+> [!NOTE]
+> Development has slowed while I focus on university work and other projects. Murmur remains a desktop proof of concept, and I plan to resume more active development soon. Live audio capture, field hardware and wireless networking are not yet implemented.
 
-- DCASE 2018 audio-dataset extraction, preprocessing, spectrogram generation, and manifest creation in Python.
-- A PyTorch convolutional classifier, called Sparrowhawk, for bird/not-bird detection.
-- Three-way dataset cross-validation, deterministic reruns, training-only augmentation, early stopping, and threshold selection.
-- ONNX export and static INT8 QDQ quantisation, with evaluation code for the float and quantised models.
-- Rust WAV loading, 32 kHz resampling, mel-spectrogram generation, and ONNX Runtime inference.
-- A two-stage pipeline in which Sparrowhawk gates the more expensive Perch species-identification model.
-- SQLite persistence for units, deployments, model metadata, labels, and detections.
-- Weather, air-quality, and moon-phase context through Open-Meteo and local calculation.
+## Features
 
-### In progress
+The current desktop proof of concept includes:
 
-- Validating thresholds and behaviour across the end-to-end desktop pipeline.
-- Improving tests, error handling, and documentation around the Python/Rust boundary.
-- Separating example deployment configuration from code.
-- Preparing a reproducible public snapshot without the private repository history, models, datasets, logs, or generated environmental data.
+- **Two-stage bird detection:** A custom Sparrowhawk classifier detects likely bird activity before passing positive recordings to Google's Perch v2 model for species identification.
+- **Model development:** Python and PyTorch tools for dataset preparation, training, evaluation, ONNX export and static INT8 quantisation.
+- **Rust audio processing:** WAV loading, resampling to 32 kHz and log-mel spectrogram generation.
+- **ONNX inference:** Execution of Sparrowhawk and Perch v2 from Rust using ONNX Runtime.
+- **SQLite storage:** Persistence of species detections and supporting model metadata, with sequence numbers to prevent duplicate results.
+- **Environmental data:** Weather and air-quality retrieval through Open-Meteo, alongside local moon-phase calculations, currently saved separately from detection records.
 
-### Planned
+## Detection Pipeline
 
-- Select and validate the field-device hardware.
-- Run the inference pipeline continuously on that device without a network dependency.
-- Transmit compact detection records through a low-power gateway.
-- Ingest detections on the home server and expose them through a dashboard.
-- Publish reproducible accuracy, model-size, memory-use, and latency measurements.
+Murmur uses a two-stage detection pipeline. Sparrowhawk first checks whether a recording contains likely bird activity. Only positive results are passed to Perch v2 for species identification.
 
-## Architecture
+```mermaid
+flowchart TB
+    Audio["10-second audio recording, resampled to 32 kHz"]
 
-```text
-Audio datasets
-      |
-Python preparation, training, evaluation, export, and quantisation
-      |
-Sparrowhawk ONNX model + threshold       Perch ONNX model + labels
-      |                                      |
-      +--------------- Rust desktop pipeline +
-                              |
-                 audio -> detection -> species
-                              |
-                 SQLite detection records
-                              |
-              environmental context (optional)
+    Audio --> Mel["One 10-second spectrogram"]
+    Mel --> Sparrowhawk["Sparrowhawk"]
+
+    Sparrowhawk --> Gate{"Bird detected?"}
+    Gate -->|No| Stop["Stop"]
+    Gate -->|Yes| Split["Split audio into two 5-second chunks"]
+
+    Audio -.->|Same resampled audio| Split
+
+    Split --> Perch["Perch v2"]
+    Perch --> SQLite["SQLite"]
 ```
 
-The eventual field system is planned as:
+Rust handles audio preparation and inference using ONNX Runtime. Sparrowhawk receives a log-mel spectrogram, while Perch processes two five-second chunks of the resampled waveform. Successful species predictions are then stored in SQLite.
 
-```text
-Starling field device -> Tern gateway -> Nest server -> Roost dashboard
+The initial Sparrowhawk stage is intended to avoid running the larger species model unnecessarily. Its potential performance and power-saving benefits still need to be evaluated on field hardware.
+
+See [Model Pipeline](docs/model-pipeline.md) for more detail on preprocessing, model training, ONNX export and quantisation.
+
+## Tech Stack
+
+| Category | Technologies |
+| :-- | :-- |
+| **Languages** | Python, Rust |
+| **Models** | Sparrowhawk (PyTorch CNN), Google Perch v2 |
+| **Training & Evaluation** | PyTorch, librosa, scikit-learn |
+| **Model Inference** | ONNX, ONNX Runtime (`ort`) |
+| **Audio Processing** | `hound`, `rubato`, `spectrs` |
+| **Database** | SQLite (`rusqlite`) |
+| **Environmental Data** | Open-Meteo (`reqwest`), `moontool` |
+
+## Development
+
+Murmur currently consists of a Python model-development pipeline and a Rust desktop runner. The Rust application processes prerecorded WAV files rather than capturing live audio.
+
+### Repository Structure
+
+| Path | Purpose |
+| :-- | :-- |
+| `tools/process_data/` | Dataset preparation and audio preprocessing |
+| `sparrowhawk/` | Model training, evaluation, ONNX export and quantisation |
+| `src/` | Rust audio processing, inference and database integration |
+| `schema.sql` | SQLite database schema |
+
+### Running Locally
+
+The Python pipeline requires the dependencies in `requirements.txt` and the relevant DCASE bird-audio datasets.
+
+The Rust runner requires the exported Sparrowhawk model and threshold, a Perch v2 ONNX model and label list, and representative WAV files. These generated and third-party files are not included in the repository.
+
+The current development entry points are:
+
+```bash
+# Python model-development pipeline
+python -m tools.setup
+python -m tools.process_data.process_data
+python -m sparrowhawk
+
+# Rust desktop runner
+cargo run
 ```
 
-Only the desktop model-development and inference path is implemented at present.
+These commands reflect the current development workflow. Model paths and input configuration still need to be made more flexible, and the latest complete end-to-end execution has not yet been reverified.
 
-## Python model pipeline
+See [Development](docs/development.md) for additional setup information and requirements.
 
-The `sparrowhawk/` package contains the model code and the `tools/` package prepares its data.
+## Documentation
 
-### Data preparation
+More detailed information about Murmur is available in the `docs/` directory.
 
-- `tools/process_data/` extracts the DCASE 2018 development datasets, resamples audio, precomputes spectrograms, and writes a manifest.
-- The manifest keeps each clip's dataset and bird/not-bird label with its processed path.
-- Raw audio and processed arrays live under the ignored `data/` directory and are not included in this snapshot.
+| Document | Description |
+| :-- | :-- |
+| [Architecture](docs/architecture.md) | Desktop components and the proposed field-device system |
+| [Model Pipeline](docs/model-pipeline.md) | Audio preprocessing, training, ONNX export and inference |
+| [Data and Persistence](docs/data-and-persistence.md) | SQLite schema, detection storage and environmental data |
+| [Development](docs/development.md) | Development setup, dependencies and testing requirements |
+| [Roadmap](docs/roadmap.md) | Current development work and longer-term plans |
+| [Glossary](docs/glossary.md) | Project terminology, model names and component definitions |
+| [Logging Standards](docs/logging-standards.md) | Log format and conventions used across the Python and Rust code |
 
-### Training and evaluation
+> **Documentation status:** Apart from Logging Standards, the supporting documents are currently AI-generated drafts. I'm reviewing their contents and will replace them with human-written versions as I work through them.
 
-- `sparrowhawk/model.py` defines the convolutional classifier.
-- `sparrowhawk/data.py` handles the three dataset folds and applies augmentation to training data only.
-- `sparrowhawk/train.py` runs training, validation, early stopping, and test evaluation with deterministic settings.
-- `sparrowhawk/export.py` exports a trained checkpoint to ONNX.
-- `sparrowhawk/quantise.py` performs static INT8 quantisation.
-- `sparrowhawk/eval.py` selects and records the deployment threshold.
-- `python -m sparrowhawk` runs the training, export, quantisation, and evaluation stages in sequence.
+## Roadmap
 
-The code records AUC, loss, recall, accuracy, false positives, false negatives, and inference time. This README does not publish a headline result because a final reproducible model and deployment measurement have not been selected.
+**Current Status:** Desktop proof of concept using prerecorded audio. Live audio capture, field hardware and wireless networking are not yet implemented.
 
-## Rust desktop proof of concept
+**Current Focus:** Making the desktop pipeline reproducible, configurable and thoroughly tested before moving to field hardware.
 
-The Rust crate in `src/` joins audio preprocessing, inference, context, and persistence.
+- [x] Prepare the DCASE datasets and train Sparrowhawk using PyTorch.
+- [x] Export Sparrowhawk to ONNX, including static INT8 quantisation and a saved detection threshold.
+- [x] Implement Rust audio processing and two-stage Sparrowhawk/Perch inference.
+- [x] Store detections in SQLite and collect environmental information separately.
+- [ ] **Complete the desktop pipeline, including folder processing, configuration, environmental data integration and testing.**
+- [ ] Build the first Starling field device with live audio capture, local inference and offline storage.
+- [ ] Evaluate and improve field-device performance, power consumption and outdoor reliability.
+- [ ] Investigate low-power wireless communication and develop the Tern gateway.
+- [ ] Build Nest and Roost, connecting the field device, gateway, storage and dashboard.
+- [ ] Build and deploy a second Starling using only the documentation (v1.0).
 
-- `audio.rs` loads WAV files, resamples them to 32 kHz, and produces mel spectrograms.
-- `model.rs` provides shared ONNX Runtime loading and inference helpers.
-- `sparrowhawk.rs` applies the first-stage bird/not-bird classifier and its saved threshold.
-- `perch.rs` splits flagged audio into chunks and returns the highest-scoring species prediction for each one.
-- `db.rs`, `unit.rs`, and `detection.rs` initialise SQLite state and persist detection records without duplicating the same sequence number.
-- `open_meteo.rs` and `moon.rs` prepare optional environmental context.
+This is a brief overview rather than a fixed schedule. See the [detailed roadmap](docs/roadmap.md) for additional milestones and ideas.
 
-The example unit values in `src/unit.rs` are deliberately non-deployment placeholders. Real identifiers and locations should come from private configuration rather than source code.
+## Licence
 
-## Data model
+[Apache-2.0](LICENSE)
 
-`schema.sql` defines the current SQLite design, including:
+## Acknowledgements
 
-- units and deployments;
-- model versions and labels;
-- detections and their sequence numbers;
-- current and daily weather observations;
-- air-quality observations; and
-- moon-phase observations.
+- [DCASE 2018 Bird Audio Detection](https://dcase.community/challenge2018/task-bird-audio-detection) - the `freefield1010`, `warblrb10k` and `BirdVox-DCASE-20k` datasets used to train Sparrowhawk.
+- [Google Perch v2](https://www.kaggle.com/models/google/bird-vocalization-classifier/tensorFlow2/perch_v2) - the pretrained model used for species identification.
 
-The schema is ahead of parts of the desktop program. Its presence records the intended persisted structure, not a claim that every table is populated end to end.
-
-## Set-up
-
-### Python environment
-
-1. Create and activate a virtual environment.
-2. Install the packages in `requirements.txt`.
-3. Download the DCASE 2018 development datasets referenced at the top of `tools/process_data/process_data.py`.
-4. Run `python -m tools.setup` to create the ignored working directories.
-5. Run `python -m tools.process_data.process_data` to prepare the datasets and manifest.
-6. Optionally run `python -m tools.benchmark_workers` and adjust the worker count for the machine.
-7. Run `python -m sparrowhawk` for the complete model pipeline, or invoke an individual stage while developing it.
-
-The repository does not contain datasets, model files, logs, or trained checkpoints.
-
-### Rust environment
-
-The Rust proof of concept expects the generated Sparrowhawk ONNX model and threshold, the Perch model and label file, and representative WAV inputs in the ignored data layout referenced by the source. Run it with `cargo run` once those local assets are present.
-
-The current executable uses development file paths and example deployment values. It is not yet a packaged application or field-device service.
-
-## Testing and reproducibility
-
-- Training uses fixed seeds and deterministic cuDNN settings where supported.
-- Dataset folds are explicit and the selected validation split is saved for reuse by later stages.
-- Quantisation calibration and evaluation reuse the recorded split instead of deriving a different one.
-- The Rust pipeline can be rerun against the same WAV inputs; detection sequence numbers prevent duplicate rows.
-
-The repository does not yet have a single automated test command covering both languages. Adding unit and integration tests around audio shapes, model inputs, database writes, and failure handling remains in progress.
-
-## Project names
-
-| Name | Component | State |
-| :--- | :--- | :--- |
-| **Murmur** | The project as a whole | Active |
-| **Sparrowhawk** | Bird/not-bird classifier | Implemented in the desktop pipeline |
-| **Perch** | Species-identification model | Implemented in the desktop pipeline |
-| **Starling** | Field device | Planned |
-| **Tern** | Radio gateway | Planned |
-| **Nest** | Home-server ingestion and storage | Planned |
-| **Roost** | Detection dashboard | Planned |
-
-## Publication notes
-
-This directory is a fresh snapshot rather than a copy of the private Git history. Generated environment data and deployment-specific location values have been removed. Before any public release, the snapshot still needs a dependency review, a working-tree secret scan, build and test checks on a machine with the required model assets, and an explicit licence decision.
+The datasets and pretrained model remain subject to their respective licences and are not distributed with this repository.
